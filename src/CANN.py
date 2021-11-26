@@ -25,7 +25,7 @@ def rotation_matrix(theta, degrees=True, **kwargs) -> np.ndarray:
     >>> rotmat = rotation_matrix(45)
     >>> tmp = rotmat @ x
     >>> eps = 1e-8
-    >>> np.sum(np.abs(tmp - np.array([0., 1.]))) < eps 
+    >>> np.sum(np.abs(tmp - np.array([0., 1.]))) < eps
     True
     """
     # convert to radians
@@ -117,13 +117,10 @@ class CANN:
             raise NotImplementedError(f"{nonlinearity=} not implemented")
 
         # initialize weights
-        self.grid_cell_fn = grid_cell(**kwargs)
         # shape: (n**2,2)
         self.M = self._init_input_weights(self.neural_sheet_1d)
         # shape: (n**2,n**2)
-        self.J = self._init_recurrent_weights(
-            self.neural_sheet_1d, self.M, self.grid_cell_fn
-        )
+        self.J = self._init_recurrent_weights(self.neural_sheet_1d, self.M)
         # shape: (n**2)
         self.Wp = self._init_readout_weights()
         self.bias = np.zeros(self.Ng)
@@ -149,7 +146,26 @@ class CANN:
         M = (neural_sheet_1d[:, ::-1] % 2) * (-1) ** neural_sheet_1d
         return M
 
-    def _init_recurrent_weights(self, neural_sheet_1d, beta, grid_cell_fn):
+    def _init_recurrent_weights(self, neural_sheet_1d, beta) -> np.ndarray:
+        """
+        Initialise recurrent weights (grid cell "self" connectivity). In this
+        initialization scheme the grid cell orientation offset (connectivity) is
+        uniformly randomly sampled. The phase offset is identical and zero for
+        all grid cells (connectivity).
+
+        Parameters
+        ----------
+        neural_sheet_1d : np.ndarray
+            2D-array of shape (Ng,2). 1D-representation of a 2D neural sheet
+            of the topographical arragement of neurons
+        beta : np.ndarray
+            2D-array of shape (Ng,2). Velocity input weights.
+
+        Returns
+        -------
+        W : np.ndarray
+            2D-array of shape (Ng,Ng). Grid cell self/recurrent connectivity
+        """
         # (n**2,1,2) - (1,n**2,2) - (1,n**2,2)=> (n**2,n**2,2)
         W = neural_sheet_1d[:, None] - neural_sheet_1d[None] - beta[None]
         W /= self.L  # relate periodicity to the length of the neural sheet
@@ -163,9 +179,17 @@ class CANN:
             ]
         )
         return W
-        # return grid_cell_fn(W)
 
-    def _init_readout_weights(self):
+    def _init_readout_weights(self) -> np.ndarray:
+        """
+        Initialise grid to place cell read out weights.
+
+        Returns
+        -------
+        Wp : np.ndarray
+            2D-array of shape (Np,Ng). Grid to place cell read out weights/
+            connectivity.
+        """
         Wp = np.zeros((self.Np, self.Ng))
         for i in range(self.Np):
             connectivity_idxs = np.random.choice(
@@ -197,10 +221,42 @@ class CANN:
             hn /= np.sum(hn)
         return hn
 
-    def p(self, g_inputs):
+    def p(self, g_inputs) -> np.ndarray:
+        """
+        Place to grid cell forwarding/projection.
+
+        Parameters
+        ----------
+        g_inputs : np.ndarray
+            1D-array of shape (Ng,). The grid cell activity (system state).
+
+        Returns
+        -------
+        place_cell_activity : np.ndarray
+            1D-array of shape (Np,). The place cell activity.
+        """
         return self.Wp @ g_inputs
 
-    def forward(self, h0, vs):
+    def forward(self, h0, vs) -> np.ndarray:
+        """
+        Forward pass through the system. A sequence of velocity inputs, an 
+        initial state is propagated through the dynamical/recurrent system until
+        reaching the final state which is passed to the place cell read out 
+        projection.
+
+        Parameters
+        ----------
+        h0 : np.ndarray
+            1D-array of shape (Ng,). Initial (grid cell) state of system.
+        vs : np.ndarray
+            2D-array of shape (S,2). A sequence (of length S) of velocities. 
+
+        Returns
+        -------
+        place_cell_activity : np.ndarray
+            1D-array of shape (Np,). The place cell activity at the final state
+            of the system.
+        """
         gs = self.g(h0, vs)
         return self.p(gs)
 
