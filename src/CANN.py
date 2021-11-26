@@ -20,14 +20,13 @@ def rotation_matrix(theta, degrees=True, **kwargs) -> np.ndarray:
 
     Examples
     --------
-    >>> np.import numpy as np
+    >>> import numpy as np
     >>> x = np.ones(2) / np.sqrt(2)
     >>> rotmat = rotation_matrix(45)
-    >>> rotmax @ x
-    array([1. 0.])
-    """
-    """
-    2d-rotation matrix implementation
+    >>> tmp = rotmat @ x
+    >>> eps = 1e-8
+    >>> np.sum(np.abs(tmp - np.array([0., 1.]))) < eps 
+    True
     """
     # convert to radians
     theta = theta * np.pi / 180 if degrees else theta
@@ -66,7 +65,7 @@ def grid_cell(phase_offset=0, orientation_offset=0, f=1, **kwargs) -> Callable:
     >>> x = np.zeros(2)
     >>> gc = grid_cell()
     >>> gc(x)
-    2.0
+    3.0
     """
     rot_theta = 60  # degrees
     relative_R = rotation_matrix(rot_theta)
@@ -92,7 +91,7 @@ class CANN:
     def __init__(self, Ng=4096, Np=512, nonlinearity="relu", Wp_mask=128, **kwargs):
         self.Ng, self.Np = Ng, Np  # Ng should be a quadratic number
         self.L = int(np.sqrt(Ng))
-        self.Wp_mask = Wp_mask # number of grid cell - place cell connections
+        self.Wp_mask = Wp_mask  # number of grid cell - place cell connections
         if self.L ** 2 != Ng:
             raise UserWarning(f"Non-square Ng not supported: {self.L**2 != Ng=}")
 
@@ -154,16 +153,25 @@ class CANN:
         # (n**2,1,2) - (1,n**2,2) - (1,n**2,2)=> (n**2,n**2,2)
         W = neural_sheet_1d[:, None] - neural_sheet_1d[None] - beta[None]
         W /= self.L  # relate periodicity to the length of the neural sheet
-        orientation_offsets = 2*np.pi*np.random.random(self.Ng)
-        W = np.array([grid_cell(orientation_offset=orientation_offsets[i], degrees=False)(W[i]) for i in range(self.Ng)])
+        orientation_offsets = 2 * np.pi * np.random.random(self.Ng)
+        W = np.array(
+            [
+                grid_cell(orientation_offset=orientation_offsets[i], degrees=False)(
+                    W[i]
+                )
+                for i in range(self.Ng)
+            ]
+        )
         return W
-        #return grid_cell_fn(W)
+        # return grid_cell_fn(W)
 
     def _init_readout_weights(self):
-        Wp = np.zeros((self.Np,self.Ng))
+        Wp = np.zeros((self.Np, self.Ng))
         for i in range(self.Np):
-            connectivity_idxs = np.random.choice(np.arange(self.Ng), size=self.Wp_mask, replace=False)
-            Wp[i,connectivity_idxs] = 1
+            connectivity_idxs = np.random.choice(
+                np.arange(self.Ng), size=self.Wp_mask, replace=False
+            )
+            Wp[i, connectivity_idxs] = 1
         return Wp
 
     def g(self, h0, vs) -> np.ndarray:
@@ -180,7 +188,7 @@ class CANN:
         Returns
         -------
         hn : np.ndarray
-            1D-array of shape (Ng). of the state of the system after all 
+            1D-array of shape (Ng). of the state of the system after all
             velocities (vs) have been sequentially applied
         """
         hn = h0
