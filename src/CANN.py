@@ -260,6 +260,13 @@ class CANN:
         gs = self.g(h0, vs)
         return self.p(gs)
 
+    def __call__(self, *args, **kwargs) -> np.ndarray:
+        """
+        Wrapper for the self.forward(*args,**kwargs) method. In other words,
+        it is equivalent to use the forward(...) method or this method.
+        """
+        return self.forward(*args, **kwargs)
+
     def prune_mask():
         """Set a prune mask"""
         pass
