@@ -90,7 +90,7 @@ def grid_cell(phase_offset=0, orientation_offset=0, f=1, **kwargs) -> Callable:
 class CANN:
     def __init__(self, Ng=4096, Np=512, nonlinearity="relu", Wp_mask=128, **kwargs):
         self.Ng, self.Np = Ng, Np  # Ng should be a quadratic number
-        self.L = int(np.sqrt(Ng))
+        self.L = int(np.sqrt(Ng))  # edge length of the square neural sheet
         self.Wp_mask = Wp_mask  # number of grid cell - place cell connections
         if self.L ** 2 != Ng:
             raise UserWarning(f"Non-square Ng not supported: {self.L**2 != Ng=}")
@@ -99,7 +99,8 @@ class CANN:
         # shape: (n,n,2)
         self.neural_sheet_2d = np.stack(
             np.meshgrid(
-                np.linspace(0, self.L - 1, self.L), np.linspace(0, self.L - 1, self.L)
+                np.arange(self.L, dtype=np.float32) - self.L / 2,
+                np.arange(self.L, dtype=np.float32) - self.L / 2,
             ),
             axis=-1,
         )
@@ -118,12 +119,12 @@ class CANN:
 
         # initialize weights
         # shape: (n**2,2)
-        self.M = self._init_input_weights(self.neural_sheet_1d)
+        self.Wv = self._init_input_weights(self.neural_sheet_1d)
         # shape: (n**2,n**2)
-        self.J = self._init_recurrent_weights(self.neural_sheet_1d, self.M)
+        self.Wr = self._init_recurrent_weights(self.neural_sheet_1d, self.Wv)
         # shape: (n**2)
         self.Wp = self._init_readout_weights()
-        self.bias = np.zeros(self.Ng)
+        self.bias = np.zeros(self.Ng)  # + 1, in sorscher
 
     def _init_input_weights(self, neural_sheet_1d) -> np.ndarray:
         """
@@ -140,13 +141,13 @@ class CANN:
 
         Returns
         -------
-        M : np.ndarray
+        Wv : np.ndarray
             2D-array of shape (Ng,2)
         """
-        M = (neural_sheet_1d[:, ::-1] % 2) * (-1) ** neural_sheet_1d
-        return M
+        Wv = (neural_sheet_1d[:, ::-1] % 2) * (-1) ** neural_sheet_1d
+        return Wv
 
-    def _init_recurrent_weights(self, neural_sheet_1d, beta) -> np.ndarray:
+    def _init_recurrent_weights(self, neural_sheet_1d, Wv) -> np.ndarray:
         """
         Initialise recurrent weights (grid cell "self" connectivity). In this
         initialization scheme the grid cell orientation offset (connectivity) is
@@ -158,27 +159,28 @@ class CANN:
         neural_sheet_1d : np.ndarray
             2D-array of shape (Ng,2). 1D-representation of a 2D neural sheet
             of the topographical arragement of neurons
-        beta : np.ndarray
+        Wv : np.ndarray
             2D-array of shape (Ng,2). Velocity input weights.
 
         Returns
         -------
-        W : np.ndarray
+        Wr : np.ndarray
             2D-array of shape (Ng,Ng). Grid cell self/recurrent connectivity
         """
         # (n**2,1,2) - (1,n**2,2) - (1,n**2,2)=> (n**2,n**2,2)
-        W = neural_sheet_1d[:, None] - neural_sheet_1d[None] - beta[None]
-        W /= self.L  # relate periodicity to the length of the neural sheet
-        orientation_offsets = 2 * np.pi * np.random.random(self.Ng)
-        W = np.array(
+        Wr = neural_sheet_1d[:, None] - neural_sheet_1d[None] - Wv[None]
+        Wr /= self.L  # relate periodicity to the length of the neural sheet
+        # orientation_offsets = 2 * np.pi * np.random.random(self.Ng)
+        orientation_offsets = np.zeros(self.Ng)
+        Wr = np.array(
             [
                 grid_cell(orientation_offset=orientation_offsets[i], degrees=False)(
-                    W[i]
+                    Wr[i]
                 )
                 for i in range(self.Ng)
             ]
         )
-        return W
+        return Wr
 
     def _init_readout_weights(self) -> np.ndarray:
         """
@@ -217,17 +219,18 @@ class CANN:
         """
         hn = h0
         for v in vs:
-            hn = self.nonlinearity(self.J @ hn + self.J @ (self.M @ v) + self.bias)
+            # hn = self.nonlinearity(self.Wr @ hn + self.Wr @ (self.Wv @ v) + self.bias)
+            hn = self.nonlinearity(self.Wr @ hn + self.Wv @ v + self.bias)
             hn /= np.sum(hn)
         return hn
 
-    def p(self, g_inputs) -> np.ndarray:
+    def p(self, hn) -> np.ndarray:
         """
         Place to grid cell forwarding/projection.
 
         Parameters
         ----------
-        g_inputs : np.ndarray
+        hn : np.ndarray
             1D-array of shape (Ng,). The grid cell activity (system state).
 
         Returns
@@ -235,13 +238,13 @@ class CANN:
         place_cell_activity : np.ndarray
             1D-array of shape (Np,). The place cell activity.
         """
-        return self.Wp @ g_inputs
+        return self.Wp @ hn
 
     def forward(self, h0, vs) -> np.ndarray:
         """
-        Forward pass through the system. A sequence of velocity inputs, an 
+        Forward pass through the system. A sequence of velocity inputs, an
         initial state is propagated through the dynamical/recurrent system until
-        reaching the final state which is passed to the place cell read out 
+        reaching the final state which is passed to the place cell read out
         projection.
 
         Parameters
@@ -249,7 +252,7 @@ class CANN:
         h0 : np.ndarray
             1D-array of shape (Ng,). Initial (grid cell) state of system.
         vs : np.ndarray
-            2D-array of shape (S,2). A sequence (of length S) of velocities. 
+            2D-array of shape (S,2). A sequence (of length S) of velocities.
 
         Returns
         -------
@@ -257,8 +260,8 @@ class CANN:
             1D-array of shape (Np,). The place cell activity at the final state
             of the system.
         """
-        gs = self.g(h0, vs)
-        return self.p(gs)
+        hn = self.g(h0, vs)
+        return self.p(hn)
 
     def __call__(self, *args, **kwargs) -> np.ndarray:
         """
